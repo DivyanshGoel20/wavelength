@@ -2,6 +2,9 @@ import express from 'express'
 import http from 'http'
 import { Server as SocketIOServer } from 'socket.io'
 import cors from 'cors'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 const app = express()
 const server = http.createServer(app)
@@ -16,6 +19,22 @@ const io = new SocketIOServer(server, {
     methods: ["GET", "POST"]
   }
 })
+
+// Resolve project directory in ESM
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// Load clues once at startup
+let clues = []
+try {
+  const cluesPath = path.join(__dirname, 'clues.json')
+  const raw = fs.readFileSync(cluesPath, 'utf-8')
+  clues = JSON.parse(raw)
+  if (!Array.isArray(clues)) clues = []
+} catch (e) {
+  console.error('Failed to load clues.json:', e)
+  clues = []
+}
 
 // Store active rooms
 const rooms = new Map()
@@ -139,6 +158,68 @@ io.on('connection', (socket) => {
       socket.to(roomCode).emit('player-left', room)
     }
     socketToPlayer.delete(socket.id)
+  })
+
+  // Handle starting the game (host only)
+  socket.on('start-game', async (data) => {
+    const { code, playerName } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!roomCode || !rooms.has(roomCode)) {
+      socket.emit('room-error', { message: 'Room not found!' })
+      return
+    }
+    const room = rooms.get(roomCode)
+    if (room.host !== playerName) {
+      socket.emit('room-error', { message: 'Only the host can start the game!' })
+      return
+    }
+    if (!Array.isArray(room.players) || room.players.length < 2) {
+      socket.emit('room-error', { message: 'Need at least 2 players to start.' })
+      return
+    }
+    if (!Array.isArray(clues) || clues.length === 0) {
+      socket.emit('room-error', { message: 'No clues available.' })
+      return
+    }
+
+    // Assign a unique random clue to each player in the room
+    const socketIds = await io.in(roomCode).allSockets()
+    const count = socketIds.size
+    const available = clues.slice()
+    // Simple shuffle (Fisher–Yates)
+    for (let i = available.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      const tmp = available[i]; available[i] = available[j]; available[j] = tmp
+    }
+
+    room.status = 'in_progress'
+    rooms.set(roomCode, room)
+
+    let index = 0
+    for (const id of socketIds) {
+      const assigned = available[index % available.length]
+      io.to(id).emit('game-started', { code: roomCode, clue: assigned })
+      index++
+    }
+  })
+
+  // Provide a new random clue to a single requester
+  socket.on('new-spectrum', (data) => {
+    const { code } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!Array.isArray(clues) || clues.length === 0) {
+      socket.emit('room-error', { message: 'No clues available.' })
+      return
+    }
+    if (!roomCode || !rooms.has(roomCode)) {
+      // still allow a clue even if room mapping missing, but keep behavior simple
+      const randomIndex = Math.floor(Math.random() * clues.length)
+      socket.emit('clue-updated', { clue: clues[randomIndex] })
+      return
+    }
+    const randomIndex = Math.floor(Math.random() * clues.length)
+    const clue = clues[randomIndex]
+    socket.emit('clue-updated', { code: roomCode, clue })
   })
 })
 
