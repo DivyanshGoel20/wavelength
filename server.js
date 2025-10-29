@@ -206,7 +206,7 @@ io.on('connection', (socket) => {
 
   // Store a player's submission (angle + clue)
   socket.on('submit-clue', (data) => {
-    const { code, playerName, angle, clue } = data || {}
+    const { code, playerName, angle, clue, left, right } = data || {}
     const roomCode = String(code || '').toUpperCase()
     if (!roomCode || !rooms.has(roomCode)) {
       socket.emit('room-error', { message: 'Room not found!' })
@@ -217,6 +217,8 @@ io.on('connection', (socket) => {
     room.submissions[playerName] = {
       angle: Number(angle),
       clue: String(clue || ''),
+      left: left,
+      right: right,
       submittedAt: Date.now(),
       socketId: socket.id
     }
@@ -239,7 +241,37 @@ io.on('connection', (socket) => {
     if (!roomCode || !rooms.has(roomCode)) return
     const room = rooms.get(roomCode)
     if (room.host !== playerName) return
-    io.to(roomCode).emit('round-started', { code: roomCode })
+
+    const order = Array.isArray(room.players) ? room.players.slice() : []
+    const submissions = room.submissions || {}
+    // Pick the first player who has a submission
+    const first = order.find(p => submissions[p])
+    if (!first) {
+      io.to(roomCode).emit('room-error', { message: 'No submissions to present yet.' })
+      return
+    }
+
+    room.round = { index: 0, order }
+    rooms.set(roomCode, room)
+
+    // Intro screen (5s)
+    io.to(roomCode).emit('show-clue-giver', { code: roomCode, presenter: first })
+
+    setTimeout(() => {
+      const latest = rooms.get(roomCode)
+      if (!latest) return
+      const presenter = latest.round && latest.round.order ? latest.round.order[0] : first
+      const sub = (latest.submissions || {})[presenter]
+      if (!sub) return
+      io.to(roomCode).emit('present-clue', {
+        code: roomCode,
+        presenter,
+        angle: sub.angle,
+        clueText: sub.clue,
+        left: sub.left,
+        right: sub.right
+      })
+    }, 5000)
   })
 
   // Provide a new random clue to a single requester

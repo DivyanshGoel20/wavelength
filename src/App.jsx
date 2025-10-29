@@ -21,6 +21,9 @@ function App() {
   const [spectrumAngle, setSpectrumAngle] = useState(0)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [allSubmitted, setAllSubmitted] = useState(false)
+  const [presenter, setPresenter] = useState(null)
+  const [presentData, setPresentData] = useState(null)
+  const [isIntro, setIsIntro] = useState(false)
 
   const getRandomRotation = () => 20 + Math.random() * 140 // keep wedges fully inside 0..180
 
@@ -74,6 +77,18 @@ function App() {
     const onAllSubmitted = () => {
       setAllSubmitted(true)
     }
+    const onShowClueGiver = (payload) => {
+      setPresenter(payload.presenter)
+      setIsIntro(true)
+      setPresentData(null)
+      // Ensure we leave the create-clue screen even if local submit ack hasn't landed
+      setIsSubmitted(true)
+    }
+    const onPresentClue = (payload) => {
+      setIsIntro(false)
+      setPresenter(payload.presenter)
+      setPresentData({ angle: payload.angle, clueText: payload.clueText, left: payload.left, right: payload.right })
+    }
 
     // Connection events
     socket.on('connect', onConnect)
@@ -89,6 +104,8 @@ function App() {
     socket.on('clue-updated', onClueUpdated)
     socket.on('clue-submitted', onClueSubmitted)
     socket.on('all-submitted', onAllSubmitted)
+    socket.on('show-clue-giver', onShowClueGiver)
+    socket.on('present-clue', onPresentClue)
 
     // Cleanup
     return () => {
@@ -103,6 +120,8 @@ function App() {
       socket.off('clue-updated', onClueUpdated)
       socket.off('clue-submitted', onClueSubmitted)
       socket.off('all-submitted', onAllSubmitted)
+      socket.off('show-clue-giver', onShowClueGiver)
+      socket.off('present-clue', onPresentClue)
       socket.disconnect()
     }
   }, [])
@@ -179,7 +198,9 @@ function App() {
       code: gameRoom.code,
       playerName,
       angle: spectrumAngle,
-      clue: yourClue
+      clue: yourClue,
+      left: currentClue?.left,
+      right: currentClue?.right
     })
   }
 
@@ -459,7 +480,7 @@ function App() {
         </div>
       )}
 
-      {/* Waiting Screen after submit */}
+      {/* Waiting Screen after submit / and round phases */}
       {gameRoom && isGameStarted && isSubmitted && (
         <div className="game-room">
           <div className="game-room-content" style={{ textAlign: 'center' }}>
@@ -472,16 +493,34 @@ function App() {
                 Leave Room
               </button>
             </div>
-            <div style={{ marginTop: '60px' }}>
-              <h1 style={{ fontSize: '40px', fontWeight: 700, marginBottom: '12px' }}>Waiting for others to finish...</h1>
-              {playerName === gameRoom.host && allSubmitted && (
-                <div style={{ marginTop: '24px' }}>
-                  <button className="btn-primary" onClick={() => socket.emit('start-round', { code: gameRoom.code, playerName })}>
-                    Start Round
-                  </button>
-                </div>
-              )}
-            </div>
+            {!isIntro && !presentData && (
+              <div style={{ marginTop: '60px' }}>
+                <h1 style={{ fontSize: '40px', fontWeight: 700, marginBottom: '12px' }}>Waiting for others to finish...</h1>
+                {playerName === gameRoom.host && allSubmitted && (
+                  <div style={{ marginTop: '24px' }}>
+                    <button className="btn-primary" onClick={() => socket.emit('start-round', { code: gameRoom.code, playerName })}>
+                      Start Round
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isIntro && presenter && (
+              <div style={{ marginTop: '40px' }}>
+                <h2 style={{ fontSize: '20px', letterSpacing: '1px', opacity: 0.8 }}>CLUE GIVER</h2>
+                <h1 style={{ fontSize: '64px', fontWeight: 800 }}>{presenter}</h1>
+                <p style={{ marginTop: '8px', opacity: 0.8 }}>Get ready...</p>
+              </div>
+            )}
+
+            {presentData && presenter && (
+              playerName === presenter ? (
+                <YourClueView data={presentData} totalPlayers={gameRoom.players.length} />
+              ) : (
+                <OtherClueView data={presentData} />
+              )
+            )}
           </div>
         </div>
       )}
@@ -586,4 +625,101 @@ function Spectrum({ rotation = 0 }) {
   )
 }
 
+
+// ----- Presentation Views -----
+function YourClueView({ data, totalPlayers }) {
+  const others = Math.max((totalPlayers || 0) - 1, 0)
+  return (
+    <div style={{ marginTop: '16px' }}>
+      {/* Header matches create-clue */}
+      <h2 style={{ marginBottom: '24px', fontSize: '32px', fontWeight: 700 }}>YOUR CLUE</h2>
+
+      {/* Use the same Spectrum component and label layout */}
+      <Spectrum rotation={data.angle} />
+      <div className="spectrum-labels" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '18px' }}>←</span>
+          <div style={{ fontWeight: 600 }}>{data.left}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ fontWeight: 600 }}>{data.right}</div>
+          <span style={{ fontSize: '18px' }}>→</span>
+        </div>
+      </div>
+
+      {/* Instructions exactly as requested */}
+      <div style={{ marginTop: '8px', textAlign: 'center' }}>
+        <h3 style={{ fontSize: '24px', fontWeight: 700, marginBottom: 6 }}>This is your clue!</h3>
+        <p style={{ opacity: 0.9 }}>You're not allowed to say ANYTHING until the target is revealed!</p>
+      </div>
+
+      {/* Ready pill */}
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <div style={{
+          marginTop: 20,
+          padding: '14px 18px',
+          borderRadius: 28,
+          border: '1px solid #6B7280',
+          background: 'rgba(255,255,255,0.05)',
+          fontWeight: 700,
+          letterSpacing: '0.5px'
+        }}>
+          {`0 OF ${others} PLAYERS READY`}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function OtherClueView({ data }) {
+  return (
+    <div style={{ marginTop: '24px' }}>
+      <h2 style={{ opacity: 0.9, letterSpacing: '1px' }}>CLUE</h2>
+      <h1 style={{ fontSize: '56px', fontWeight: 800, margin: '8px 0 24px' }}>{data.clueText}</h1>
+      <Gauge angle={data.angle} left={data.left} right={data.right} />
+      <div style={{ marginTop: '24px' }}>
+        <h3 style={{ fontWeight: 700, fontSize: '24px' }}>This is their clue!</h3>
+        <p style={{ opacity: 0.8 }}>You're not allowed to say ANYTHING until the target is revealed!</p>
+      </div>
+    </div>
+  )
+}
+
+function Gauge({ angle = 90, left, right }) {
+  const width = 600
+  const height = 320
+  const cx = width / 2
+  const cy = height
+  const r = Math.min(width, height * 2) * 0.48
+
+  const polar = (a) => {
+    const rad = (a * Math.PI) / 180
+    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) }
+  }
+  const leftPoint = polar(180)
+  const rightPoint = polar(0)
+  const knob = polar(angle)
+  const bgPath = `M ${leftPoint.x} ${leftPoint.y} A ${r} ${r} 0 0 1 ${rightPoint.x} ${rightPoint.y} L ${cx} ${cy} Z`
+
+  return (
+    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
+      <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ maxWidth: 720 }}>
+        <path d={bgPath} fill="#6BBBC0" stroke="#111827" strokeWidth="2" />
+        <circle cx={knob.x} cy={knob.y} r="60" fill="#D12B42" stroke="#111827" strokeWidth="2" />
+      </svg>
+      <div style={{ position: 'relative', width: '100%', maxWidth: 720, marginTop: -20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>←</span>
+            <strong>{left}</strong>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <strong>{right}</strong>
+            <span>→</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
