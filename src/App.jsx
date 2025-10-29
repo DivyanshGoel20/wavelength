@@ -19,6 +19,8 @@ function App() {
   const [currentClue, setCurrentClue] = useState(null)
   const [yourClue, setYourClue] = useState('')
   const [spectrumAngle, setSpectrumAngle] = useState(0)
+  const [isSubmitted, setIsSubmitted] = useState(false)
+  const [allSubmitted, setAllSubmitted] = useState(false)
 
   const getRandomRotation = () => 20 + Math.random() * 140 // keep wedges fully inside 0..180
 
@@ -66,6 +68,12 @@ function App() {
       setCurrentClue(payload.clue)
       setSpectrumAngle(getRandomRotation())
     }
+    const onClueSubmitted = () => {
+      setIsSubmitted(true)
+    }
+    const onAllSubmitted = () => {
+      setAllSubmitted(true)
+    }
 
     // Connection events
     socket.on('connect', onConnect)
@@ -79,6 +87,8 @@ function App() {
     socket.on('player-left', onPlayerLeft)
     socket.on('game-started', onGameStarted)
     socket.on('clue-updated', onClueUpdated)
+    socket.on('clue-submitted', onClueSubmitted)
+    socket.on('all-submitted', onAllSubmitted)
 
     // Cleanup
     return () => {
@@ -91,6 +101,8 @@ function App() {
       socket.off('player-left', onPlayerLeft)
       socket.off('game-started', onGameStarted)
       socket.off('clue-updated', onClueUpdated)
+      socket.off('clue-submitted', onClueSubmitted)
+      socket.off('all-submitted', onAllSubmitted)
       socket.disconnect()
     }
   }, [])
@@ -151,11 +163,24 @@ function App() {
     setIsGameStarted(false)
     setCurrentClue(null)
     setYourClue('')
+    setIsSubmitted(false)
+    setAllSubmitted(false)
   }
 
   const handleStartGame = () => {
     if (!gameRoom) return
     socket.emit('start-game', { code: gameRoom.code, playerName })
+  }
+
+  const handleSubmitClue = () => {
+    if (!gameRoom) return
+    if (!yourClue.trim()) return
+    socket.emit('submit-clue', {
+      code: gameRoom.code,
+      playerName,
+      angle: spectrumAngle,
+      clue: yourClue
+    })
   }
 
   return (
@@ -370,7 +395,7 @@ function App() {
       )}
 
       {/* Create Clue Screen */}
-      {gameRoom && isGameStarted && currentClue && (
+      {gameRoom && isGameStarted && currentClue && !isSubmitted && (
         <div className="game-room">
           <div className="game-room-content">
             <div className="room-header">
@@ -405,7 +430,7 @@ function App() {
                 type="text"
                 placeholder="YOUR CLUE"
                 value={yourClue}
-                onChange={(e) => setYourClue(e.target.value)}
+                onChange={(e) => setYourClue(e.target.value.toUpperCase())}
                 style={{
                   width: '100%',
                   padding: '16px 18px',
@@ -414,7 +439,8 @@ function App() {
                   background: '#1f2937',
                   color: 'white',
                   fontWeight: 600,
-                  letterSpacing: '0.5px'
+                  letterSpacing: '0.5px',
+                  textTransform: 'uppercase'
                 }}
               />
 
@@ -426,8 +452,35 @@ function App() {
                     setSpectrumAngle(getRandomRotation())
                   }
                 }}>New Spectrum</button>
-                <button className="btn-primary" style={{ padding: '12px 18px', borderRadius: '20px' }}>SUBMIT</button>
+                <button className="btn-primary" disabled={!yourClue.trim()} style={{ padding: '12px 18px', borderRadius: '20px', opacity: yourClue.trim() ? 1 : 0.5, cursor: yourClue.trim() ? 'pointer' : 'not-allowed' }} onClick={handleSubmitClue}>SUBMIT</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Waiting Screen after submit */}
+      {gameRoom && isGameStarted && isSubmitted && (
+        <div className="game-room">
+          <div className="game-room-content" style={{ textAlign: 'center' }}>
+            <div className="room-header" style={{ justifyContent: 'space-between' }}>
+              <h2>Room: {gameRoom.code}</h2>
+              <button 
+                className="btn-secondary"
+                onClick={handleBackToMenu}
+              >
+                Leave Room
+              </button>
+            </div>
+            <div style={{ marginTop: '60px' }}>
+              <h1 style={{ fontSize: '40px', fontWeight: 700, marginBottom: '12px' }}>Waiting for others to finish...</h1>
+              {playerName === gameRoom.host && allSubmitted && (
+                <div style={{ marginTop: '24px' }}>
+                  <button className="btn-primary" onClick={() => socket.emit('start-round', { code: gameRoom.code, playerName })}>
+                    Start Round
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

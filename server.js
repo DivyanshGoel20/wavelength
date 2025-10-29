@@ -60,7 +60,8 @@ io.on('connection', (socket) => {
       host,
       players: [playerName],
       status: 'waiting',
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      submissions: {}
     }
 
     rooms.set(roomCode, roomData)
@@ -201,6 +202,44 @@ io.on('connection', (socket) => {
       io.to(id).emit('game-started', { code: roomCode, clue: assigned })
       index++
     }
+  })
+
+  // Store a player's submission (angle + clue)
+  socket.on('submit-clue', (data) => {
+    const { code, playerName, angle, clue } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!roomCode || !rooms.has(roomCode)) {
+      socket.emit('room-error', { message: 'Room not found!' })
+      return
+    }
+    const room = rooms.get(roomCode)
+    if (!room.submissions) room.submissions = {}
+    room.submissions[playerName] = {
+      angle: Number(angle),
+      clue: String(clue || ''),
+      submittedAt: Date.now(),
+      socketId: socket.id
+    }
+    rooms.set(roomCode, room)
+    socket.emit('clue-submitted', { ok: true })
+    socket.to(roomCode).emit('player-submitted', { playerName })
+
+    // If all players have submitted, notify room
+    const totalPlayers = Array.isArray(room.players) ? room.players.length : 0
+    const submittedCount = Object.keys(room.submissions || {}).length
+    if (totalPlayers > 0 && submittedCount >= totalPlayers) {
+      io.to(roomCode).emit('all-submitted', { code: roomCode, submittedCount, totalPlayers })
+    }
+  })
+
+  // Placeholder for round start (no-op logic for now)
+  socket.on('start-round', (data) => {
+    const { code, playerName } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!roomCode || !rooms.has(roomCode)) return
+    const room = rooms.get(roomCode)
+    if (room.host !== playerName) return
+    io.to(roomCode).emit('round-started', { code: roomCode })
   })
 
   // Provide a new random clue to a single requester
