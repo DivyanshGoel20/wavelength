@@ -30,6 +30,10 @@ function App() {
   const [isRevealing, setIsRevealing] = useState(false)
   const [revealedAngle, setRevealedAngle] = useState(null)
   const [scores, setScores] = useState(null)
+  const [isLastCycle, setIsLastCycle] = useState(false)
+  const [isGameOver, setIsGameOver] = useState(false)
+  const [leaderboard, setLeaderboard] = useState(null)
+  const [isEnding, setIsEnding] = useState(false)
 
   const getRandomRotation = () => 20 + Math.random() * 140 // keep wedges fully inside 0..180
 
@@ -111,9 +115,24 @@ function App() {
       setIsRevealing(true)
     }
     const onRevealTarget = (payload) => {
+      console.log('[client] reveal-target received', {
+        code: payload && payload.code,
+        presenter: payload && payload.presenter,
+        angle: payload && payload.angle,
+        isLastCycle: payload && payload.isLastCycle
+      })
       setIsRevealing(false)
       setRevealedAngle(payload.angle)
       setScores(payload.scores || null)
+      setIsLastCycle(!!payload.isLastCycle)
+    }
+    const onGameEnded = (payload) => {
+      console.log('[client] game-ended received', {
+        code: payload && payload.code,
+        leaderboardSize: Array.isArray(payload && payload.leaderboard) ? payload.leaderboard.length : 'n/a'
+      })
+      setIsGameOver(true)
+      setLeaderboard(payload.leaderboard || [])
     }
 
     // Connection events
@@ -135,6 +154,7 @@ function App() {
     socket.on('ready-updated', onReadyUpdated)
     socket.on('reveal-start', onRevealStart)
     socket.on('reveal-target', onRevealTarget)
+    socket.on('game-ended', onGameEnded)
 
     // Cleanup
     return () => {
@@ -154,9 +174,18 @@ function App() {
       socket.off('ready-updated', onReadyUpdated)
       socket.off('reveal-start', onRevealStart)
       socket.off('reveal-target', onRevealTarget)
+      socket.off('game-ended', onGameEnded)
       socket.disconnect()
     }
   }, [])
+
+  const handleEndGame = () => {
+    if (!gameRoom) return
+    console.log('[client] End Game clicked', { code: gameRoom.code, playerName })
+    setIsEnding(true)
+    setIsGameOver(true) // optimistically show leaderboard screen while waiting
+    socket.emit('end-game', { code: gameRoom.code, playerName })
+  }
 
   // Generate a random room code
   const generateRoomCode = () => {
@@ -216,6 +245,11 @@ function App() {
     setYourClue('')
     setIsSubmitted(false)
     setAllSubmitted(false)
+    setIsRevealing(false)
+    setRevealedAngle(null)
+    setScores(null)
+    setIsGameOver(false)
+    setLeaderboard(null)
   }
 
   const handleStartGame = () => {
@@ -234,6 +268,45 @@ function App() {
       left: currentClue?.left,
       right: currentClue?.right
     })
+  }
+
+  if (isGameOver) {
+    return (
+      <div className="app">
+        <div className="game-room">
+          <div className="game-room-content" style={{ textAlign: 'center' }}>
+            <h1 style={{ fontSize: '40px', fontWeight: 800, marginBottom: 16 }}>Leaderboard</h1>
+            {!leaderboard && (
+              <div style={{ marginTop: 24, opacity: 0.8 }}>{isEnding ? 'Loading leaderboard…' : 'Waiting for host…'}</div>
+            )}
+            {leaderboard && (
+              <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'left' }}>
+                {(leaderboard || []).map((entry, idx) => (
+                  <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 12px', borderBottom: '1px solid #374151' }}>
+                    <div style={{ fontWeight: 700 }}>{idx + 1}. {entry.name}</div>
+                    <div style={{ fontWeight: 700 }}>{entry.points}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: 24 }}>
+              <button className="btn-primary" onClick={() => {
+                // Return to in-room lobby (do NOT leave the room)
+                setIsGameOver(false)
+                setIsGameStarted(false)
+                setIsSubmitted(false)
+                setPresenter(null)
+                setPresentData(null)
+                setRevealedAngle(null)
+                setScores(null)
+                setLeaderboard(null)
+                setIsLastCycle(false)
+              }}>Back to Lobby</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -553,11 +626,17 @@ function App() {
                 <OtherClueView data={presentData} presenter={presenter} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} myReady={myReady} isRevealing={isRevealing} revealedAngle={revealedAngle} scores={scores} playerName={playerName} onToggleReady={(val, guessAngle) => { setMyReady(val); socket.emit('player-ready', { code: gameRoom.code, playerName, ready: val, guessAngle }) }} />
               )
             )}
-            {playerName === gameRoom.host && revealedAngle != null && (
+            {playerName === gameRoom.host && revealedAngle != null && !isGameOver && (
               <div style={{ marginTop: 16 }}>
-                <button className="btn-primary" onClick={() => socket.emit('next-round', { code: gameRoom.code, playerName })}>
-                  Next Round
-                </button>
+                {isLastCycle ? (
+                  <button className="btn-primary" onClick={handleEndGame}>
+                    End Game
+                  </button>
+                ) : (
+                  <button className="btn-primary" onClick={() => socket.emit('next-round', { code: gameRoom.code, playerName })}>
+                    Next Round
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -61,7 +61,8 @@ io.on('connection', (socket) => {
       players: [playerName],
       status: 'waiting',
       createdAt: Date.now(),
-      submissions: {}
+      submissions: {},
+      scores: {}
     }
 
     rooms.set(roomCode, roomData)
@@ -313,6 +314,12 @@ io.on('connection', (socket) => {
           const g = room.round.guesses ? room.round.guesses[p] : undefined
           scores[p] = { points: pointsForAngle(g, bands), guessAngle: g }
         })
+        // accumulate
+        room.scores = room.scores || {}
+        Object.keys(scores).forEach((p) => {
+          room.scores[p] = (room.scores[p] || 0) + (scores[p].points || 0)
+        })
+        rooms.set(roomCode, room)
       } catch (e) {}
       setTimeout(() => {
         io.to(roomCode).emit('reveal-target', {
@@ -322,7 +329,8 @@ io.on('connection', (socket) => {
           left: sub && sub.left,
           right: sub && sub.right,
           clueText: sub && sub.clue,
-          scores
+          scores,
+          isLastCycle: room.round && room.round.index === (room.round.order.length - 1)
         })
       }, 1500)
     }
@@ -363,6 +371,28 @@ io.on('connection', (socket) => {
       const totalOthers = (latest.players ? latest.players.length : 0) - 1
       io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount: 0, totalOthers })
     }, 5000)
+  })
+
+  // End game and send leaderboard
+  socket.on('end-game', (data) => {
+    const { code, playerName } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    console.log('[server] end-game received', { roomCode, playerName })
+    if (!roomCode || !rooms.has(roomCode)) {
+      console.log('[server] end-game rejected: room not found', { roomCode })
+      return
+    }
+    const room = rooms.get(roomCode)
+    if (room.host !== playerName) {
+      console.log('[server] end-game rejected: not host', { expectedHost: room.host, playerName })
+      return
+    }
+    const scores = room.scores || {}
+    const leaderboard = Object.entries(scores)
+      .map(([name, pts]) => ({ name, points: pts }))
+      .sort((a,b) => b.points - a.points)
+    console.log('[server] emitting game-ended', { roomCode, entries: leaderboard.length })
+    io.to(roomCode).emit('game-ended', { code: roomCode, leaderboard })
   })
 
   function computeBands(rotationDeg) {
