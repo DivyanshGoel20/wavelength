@@ -251,7 +251,7 @@ io.on('connection', (socket) => {
       return
     }
 
-    room.round = { index: 0, order }
+    room.round = { index: 0, order, presenter: first, ready: {} }
     rooms.set(roomCode, room)
 
     // Intro screen (5s)
@@ -261,6 +261,9 @@ io.on('connection', (socket) => {
       const latest = rooms.get(roomCode)
       if (!latest) return
       const presenter = latest.round && latest.round.order ? latest.round.order[0] : first
+      latest.round.presenter = presenter
+      latest.round.ready = {}
+      rooms.set(roomCode, latest)
       const sub = (latest.submissions || {})[presenter]
       if (!sub) return
       io.to(roomCode).emit('present-clue', {
@@ -271,7 +274,27 @@ io.on('connection', (socket) => {
         left: sub.left,
         right: sub.right
       })
+      // Broadcast initial ready state
+      const totalOthers = (latest.players ? latest.players.length : 0) - 1
+      io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount: 0, totalOthers })
     }, 5000)
+  })
+
+  // Toggle player's ready state during presentation
+  socket.on('player-ready', (data) => {
+    const { code, playerName, ready } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!roomCode || !rooms.has(roomCode)) return
+    const room = rooms.get(roomCode)
+    if (!room.round) return
+    if (!room.round.ready) room.round.ready = {}
+    room.round.ready[playerName] = !!ready
+    rooms.set(roomCode, room)
+    const presenter = room.round.presenter
+    const totalOthers = (room.players ? room.players.length : 0) - 1
+    const readyCount = Object.entries(room.round.ready)
+      .filter(([name, val]) => name !== presenter && val).length
+    io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount, totalOthers, playerName, ready: !!ready })
   })
 
   // Provide a new random clue to a single requester

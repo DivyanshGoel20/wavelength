@@ -24,6 +24,9 @@ function App() {
   const [presenter, setPresenter] = useState(null)
   const [presentData, setPresentData] = useState(null)
   const [isIntro, setIsIntro] = useState(false)
+  const [readyCount, setReadyCount] = useState(0)
+  const [totalOthers, setTotalOthers] = useState(0)
+  const [myReady, setMyReady] = useState(false)
 
   const getRandomRotation = () => 20 + Math.random() * 140 // keep wedges fully inside 0..180
 
@@ -88,6 +91,15 @@ function App() {
       setIsIntro(false)
       setPresenter(payload.presenter)
       setPresentData({ angle: payload.angle, clueText: payload.clueText, left: payload.left, right: payload.right })
+      const others = (gameRoom?.players?.length || 0) - 1
+      setReadyCount(0)
+      setTotalOthers(Math.max(others, 0))
+      setMyReady(false)
+    }
+    const onReadyUpdated = (payload) => {
+      if (payload && typeof payload.readyCount === 'number') setReadyCount(payload.readyCount)
+      if (payload && typeof payload.totalOthers === 'number') setTotalOthers(payload.totalOthers)
+      if (payload && payload.playerName === playerName) setMyReady(!!payload.ready)
     }
 
     // Connection events
@@ -106,6 +118,7 @@ function App() {
     socket.on('all-submitted', onAllSubmitted)
     socket.on('show-clue-giver', onShowClueGiver)
     socket.on('present-clue', onPresentClue)
+    socket.on('ready-updated', onReadyUpdated)
 
     // Cleanup
     return () => {
@@ -122,6 +135,7 @@ function App() {
       socket.off('all-submitted', onAllSubmitted)
       socket.off('show-clue-giver', onShowClueGiver)
       socket.off('present-clue', onPresentClue)
+      socket.off('ready-updated', onReadyUpdated)
       socket.disconnect()
     }
   }, [])
@@ -516,9 +530,9 @@ function App() {
 
             {presentData && presenter && (
               playerName === presenter ? (
-                <YourClueView data={presentData} totalPlayers={gameRoom.players.length} />
+                <YourClueView data={presentData} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} />
               ) : (
-                <OtherClueView data={presentData} />
+                <OtherClueView data={presentData} presenter={presenter} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} myReady={myReady} onToggleReady={(val) => { setMyReady(val); socket.emit('player-ready', { code: gameRoom.code, playerName, ready: val }) }} />
               )
             )}
           </div>
@@ -627,12 +641,14 @@ function Spectrum({ rotation = 0 }) {
 
 
 // ----- Presentation Views -----
-function YourClueView({ data, totalPlayers }) {
+function YourClueView({ data, totalPlayers, readyCount = 0, totalOthers = 0 }) {
   const others = Math.max((totalPlayers || 0) - 1, 0)
   return (
     <div style={{ marginTop: '16px' }}>
       {/* Header matches create-clue */}
       <h2 style={{ marginBottom: '24px', fontSize: '32px', fontWeight: 700 }}>YOUR CLUE</h2>
+      {/* Show the actual clue text */}
+      <h1 style={{ fontSize: '48px', fontWeight: 800, textAlign: 'center', marginBottom: '12px' }}>{data.clueText}</h1>
 
       {/* Use the same Spectrum component and label layout */}
       <Spectrum rotation={data.angle} />
@@ -664,22 +680,69 @@ function YourClueView({ data, totalPlayers }) {
           fontWeight: 700,
           letterSpacing: '0.5px'
         }}>
-          {`0 OF ${others} PLAYERS READY`}
+          {`${readyCount} OF ${totalOthers || others} PLAYERS READY`}
         </div>
       </div>
     </div>
   )
 }
 
-function OtherClueView({ data }) {
+function OtherClueView({ data, presenter, totalPlayers, readyCount = 0, totalOthers = 0, myReady = false, onToggleReady }) {
+  const [guessAngle, setGuessAngle] = React.useState(90)
+  const others = Math.max((totalPlayers || 0) - 1, 0)
   return (
-    <div style={{ marginTop: '24px' }}>
-      <h2 style={{ opacity: 0.9, letterSpacing: '1px' }}>CLUE</h2>
-      <h1 style={{ fontSize: '56px', fontWeight: 800, margin: '8px 0 24px' }}>{data.clueText}</h1>
-      <Gauge angle={data.angle} left={data.left} right={data.right} />
-      <div style={{ marginTop: '24px' }}>
-        <h3 style={{ fontWeight: 700, fontSize: '24px' }}>This is their clue!</h3>
-        <p style={{ opacity: 0.8 }}>You're not allowed to say ANYTHING until the target is revealed!</p>
+    <div style={{ marginTop: '16px' }}>
+      {/* Header mirrors playing.jpg: "NAME'S CLUE" */}
+      <h2 style={{ marginBottom: '24px', fontSize: '32px', fontWeight: 700 }}>
+        {`${String(presenter || '').toUpperCase()}'S CLUE`}
+      </h2>
+      {/* Show the actual clue text */}
+      <h1 style={{ fontSize: '48px', fontWeight: 800, textAlign: 'center', marginBottom: '12px' }}>{data.clueText}</h1>
+
+      {/* Full blue spectrum with stick controlled by slider below */}
+      <AudienceSpectrum angle={guessAngle} />
+
+      {/* Labels below spectrum */}
+      <div className="spectrum-labels" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '18px' }}>←</span>
+          <div style={{ fontWeight: 600 }}>{data.left}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ fontWeight: 600 }}>{data.right}</div>
+          <span style={{ fontSize: '18px' }}>→</span>
+        </div>
+      </div>
+
+      {/* Slider control below spectrum (0 = left end, 180 = right end) */}
+      <input
+        type="range"
+        min={0}
+        max={180}
+        value={180 - guessAngle}
+        onChange={(e) => setGuessAngle(180 - Number(e.target.value))}
+        style={{ width: '100%', margin: '8px 0 12px' }}
+      />
+
+      {/* Bottom controls: players ready pill and READY button */}
+      <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 20 }}>
+        <div style={{
+          padding: '14px 18px',
+          borderRadius: 28,
+          border: '1px solid #6B7280',
+          background: 'rgba(255,255,255,0.05)',
+          fontWeight: 700,
+          letterSpacing: '0.5px'
+        }}>
+          {`${readyCount} / ${totalOthers || others} PLAYERS READY`}
+        </div>
+        <button
+          className="btn-primary"
+          onClick={() => onToggleReady && onToggleReady(!myReady)}
+          style={{ background: myReady ? '#2563EB' : undefined }}
+        >
+          {myReady ? "YOU'RE READY ✔" : 'READY'}
+        </button>
       </div>
     </div>
   )
@@ -719,6 +782,47 @@ function Gauge({ angle = 90, left, right }) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function AudienceSpectrum({ angle = 90 }) {
+  const width = 600
+  const height = 320
+  const cx = width / 2
+  const cy = height
+  const r = Math.min(width, height * 2) * 0.48
+  // purely presentational – no drag handling here
+  const polar = (a) => {
+    const rad = (a * Math.PI) / 180
+    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) }
+  }
+  const leftPoint = polar(180)
+  const rightPoint = polar(0)
+  // Big fixed circle near the bottom-center of the semicircle
+  const bigCircleR = 60
+  const bigCircle = { x: cx, y: cy - 40 }
+
+  // Slider line pivots around the big circle and points to the semicircle boundary at 'angle'
+  const rad = (angle * Math.PI) / 180
+  const lineEnd = { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) }
+  const bgPath = `M ${leftPoint.x} ${leftPoint.y} A ${r} ${r} 0 0 1 ${rightPoint.x} ${rightPoint.y} L ${cx} ${cy} Z`
+
+
+  return (
+    <div style={{ width: '100%', display: 'flex', justifyContent: 'center', marginBottom: 8 }}>
+      <svg
+        width="100%"
+        viewBox={`0 0 ${width} ${height}`}
+        style={{ maxWidth: 720 }}
+      >
+        {/* solid blue semicircle */}
+        <path d={bgPath} fill="#3B82F6" stroke="#111827" strokeWidth="2" />
+        {/* rotating line (stick) from the big circle to arc */}
+        <line x1={bigCircle.x} y1={bigCircle.y} x2={lineEnd.x} y2={lineEnd.y} stroke="#D12B42" strokeWidth="14" strokeLinecap="round" />
+        {/* fixed big circle */}
+        <circle cx={bigCircle.x} cy={bigCircle.y} r={bigCircleR} fill="#D12B42" stroke="#111827" strokeWidth="2" />
+      </svg>
     </div>
   )
 }
