@@ -282,13 +282,17 @@ io.on('connection', (socket) => {
 
   // Toggle player's ready state during presentation
   socket.on('player-ready', (data) => {
-    const { code, playerName, ready } = data || {}
+    const { code, playerName, ready, guessAngle } = data || {}
     const roomCode = String(code || '').toUpperCase()
     if (!roomCode || !rooms.has(roomCode)) return
     const room = rooms.get(roomCode)
     if (!room.round) return
     if (!room.round.ready) room.round.ready = {}
+    if (!room.round.guesses) room.round.guesses = {}
     room.round.ready[playerName] = !!ready
+    if (typeof guessAngle === 'number') {
+      room.round.guesses[playerName] = Number(guessAngle)
+    }
     rooms.set(roomCode, room)
     const presenter = room.round.presenter
     const totalOthers = (room.players ? room.players.length : 0) - 1
@@ -301,6 +305,15 @@ io.on('connection', (socket) => {
       io.to(roomCode).emit('reveal-start', { code: roomCode })
       const sub = (room.submissions || {})[presenter]
       const angle = sub ? Number(sub.angle) : 90
+      const scores = {}
+      try {
+        const bands = computeBands(angle)
+        room.players.forEach((p) => {
+          if (p === presenter) return
+          const g = room.round.guesses ? room.round.guesses[p] : undefined
+          scores[p] = { points: pointsForAngle(g, bands), guessAngle: g }
+        })
+      } catch (e) {}
       setTimeout(() => {
         io.to(roomCode).emit('reveal-target', {
           code: roomCode,
@@ -308,7 +321,8 @@ io.on('connection', (socket) => {
           angle,
           left: sub && sub.left,
           right: sub && sub.right,
-          clueText: sub && sub.clue
+          clueText: sub && sub.clue,
+          scores
         })
       }, 1500)
     }
@@ -348,8 +362,30 @@ io.on('connection', (socket) => {
       })
       const totalOthers = (latest.players ? latest.players.length : 0) - 1
       io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount: 0, totalOthers })
-    }, 500)
+    }, 5000)
   })
+
+  function computeBands(rotationDeg) {
+    const wedgeHalf = 6
+    const pointsArr = [2,3,4,3,2]
+    const bands = []
+    let cursor = rotationDeg - wedgeHalf * 5
+    for (let i=0;i<5;i++) {
+      const start = cursor
+      const end = cursor + wedgeHalf*2
+      bands.push({ start, end, points: pointsArr[i] })
+      cursor = end
+    }
+    return bands
+  }
+
+  function pointsForAngle(angleDeg, bands) {
+    if (typeof angleDeg !== 'number') return 0
+    for (const b of bands) {
+      if (angleDeg >= b.start && angleDeg <= b.end) return b.points
+    }
+    return 0
+  }
 
   // Provide a new random clue to a single requester
   socket.on('new-spectrum', (data) => {

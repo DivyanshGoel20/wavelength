@@ -29,6 +29,7 @@ function App() {
   const [myReady, setMyReady] = useState(false)
   const [isRevealing, setIsRevealing] = useState(false)
   const [revealedAngle, setRevealedAngle] = useState(null)
+  const [scores, setScores] = useState(null)
 
   const getRandomRotation = () => 20 + Math.random() * 140 // keep wedges fully inside 0..180
 
@@ -112,6 +113,7 @@ function App() {
     const onRevealTarget = (payload) => {
       setIsRevealing(false)
       setRevealedAngle(payload.angle)
+      setScores(payload.scores || null)
     }
 
     // Connection events
@@ -548,7 +550,7 @@ function App() {
               playerName === presenter ? (
                 <YourClueView data={presentData} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} revealedAngle={revealedAngle} />
               ) : (
-                <OtherClueView data={presentData} presenter={presenter} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} myReady={myReady} isRevealing={isRevealing} revealedAngle={revealedAngle} onToggleReady={(val) => { setMyReady(val); socket.emit('player-ready', { code: gameRoom.code, playerName, ready: val }) }} />
+                <OtherClueView data={presentData} presenter={presenter} totalPlayers={gameRoom.players.length} readyCount={readyCount} totalOthers={totalOthers} myReady={myReady} isRevealing={isRevealing} revealedAngle={revealedAngle} scores={scores} playerName={playerName} onToggleReady={(val, guessAngle) => { setMyReady(val); socket.emit('player-ready', { code: gameRoom.code, playerName, ready: val, guessAngle }) }} />
               )
             )}
             {playerName === gameRoom.host && revealedAngle != null && (
@@ -712,9 +714,10 @@ function YourClueView({ data, totalPlayers, readyCount = 0, totalOthers = 0, rev
   )
 }
 
-function OtherClueView({ data, presenter, totalPlayers, readyCount = 0, totalOthers = 0, myReady = false, onToggleReady, isRevealing = false, revealedAngle = null }) {
+function OtherClueView({ data, presenter, totalPlayers, readyCount = 0, totalOthers = 0, myReady = false, onToggleReady, isRevealing = false, revealedAngle = null, scores = null, playerName }) {
   const [guessAngle, setGuessAngle] = React.useState(90)
   const others = Math.max((totalPlayers || 0) - 1, 0)
+  const myPoints = scores && playerName ? (scores[playerName] ? scores[playerName].points : null) : null
   return (
     <div style={{ marginTop: '16px' }}>
       {/* Header mirrors playing.jpg: "NAME'S CLUE" */}
@@ -750,33 +753,38 @@ function OtherClueView({ data, presenter, totalPlayers, readyCount = 0, totalOth
         max={180}
         value={180 - guessAngle}
         onChange={(e) => setGuessAngle(180 - Number(e.target.value))}
-        disabled={revealedAngle != null}
+        disabled={isRevealing || revealedAngle != null}
         style={{ width: '100%', margin: '8px 0 12px', opacity: revealedAngle != null ? 0.6 : 1 }}
       />
       {isRevealing && <div style={{ opacity: 0.9, marginTop: 4 }}>Revealing target...</div>}
 
       {/* Bottom controls: players ready pill and READY button */}
       <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 20 }}>
-        <div style={{
-          padding: '14px 18px',
-          borderRadius: 28,
-          border: '1px solid #6B7280',
-          background: 'rgba(255,255,255,0.05)',
-          fontWeight: 700,
-          letterSpacing: '0.5px'
-        }}>
-          {`${readyCount} / ${totalOthers || others} PLAYERS READY`}
-        </div>
-        {revealedAngle == null && (
+        {(!isRevealing && revealedAngle == null) && (
+          <div style={{
+            padding: '14px 18px',
+            borderRadius: 28,
+            border: '1px solid #6B7280',
+            background: 'rgba(255,255,255,0.05)',
+            fontWeight: 700,
+            letterSpacing: '0.5px'
+          }}>
+            {`${readyCount} / ${totalOthers || others} PLAYERS READY`}
+          </div>
+        )}
+        {(!isRevealing && revealedAngle == null) && (
           <button
             className="btn-primary"
-            onClick={() => onToggleReady && onToggleReady(!myReady)}
+            onClick={() => onToggleReady && onToggleReady(!myReady, guessAngle)}
             style={{ background: myReady ? '#2563EB' : undefined }}
           >
             {myReady ? "YOU'RE READY ✔" : 'READY'}
           </button>
         )}
       </div>
+      {revealedAngle != null && (myPoints != null) && (
+        <div style={{ marginTop: 12, textAlign: 'center', fontWeight: 700 }}>You scored {myPoints} points</div>
+      )}
     </div>
   )
 }
