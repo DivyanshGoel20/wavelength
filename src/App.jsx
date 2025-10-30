@@ -3,7 +3,8 @@ import { io } from 'socket.io-client'
 import './App.css'
 
 // WebSocket connection
-const socket = io('http://localhost:3001', {
+const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://wavelength-zqsn.onrender.com'
+const socket = io(SERVER_URL, {
   autoConnect: false
 })
 
