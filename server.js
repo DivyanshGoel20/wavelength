@@ -49,7 +49,7 @@ io.on('connection', (socket) => {
   socket.on('create-room', (data) => {
     const { code, host, playerName } = data
     const roomCode = String(code).toUpperCase()
-
+    
     if (rooms.has(roomCode)) {
       socket.emit('room-error', { message: 'Room already exists!' })
       return
@@ -67,7 +67,7 @@ io.on('connection', (socket) => {
     rooms.set(roomCode, roomData)
     socket.join(roomCode)
     socketToPlayer.set(socket.id, { code: roomCode, playerName })
-
+    
     console.log('Room created:', roomCode)
     socket.emit('room-created', roomData)
   })
@@ -123,12 +123,12 @@ io.on('connection', (socket) => {
       room.players = room.players.filter(p => p !== nameToRemove)
     }
 
-    if (room.players.length === 0) {
+        if (room.players.length === 0) {
       rooms.delete(roomCode)
       console.log('Room deleted:', roomCode)
-    } else {
+        } else {
       rooms.set(roomCode, room)
-      // Notify remaining players
+          // Notify remaining players
       socket.to(roomCode).emit('player-left', room)
     }
     
@@ -295,6 +295,60 @@ io.on('connection', (socket) => {
     const readyCount = Object.entries(room.round.ready)
       .filter(([name, val]) => name !== presenter && val).length
     io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount, totalOthers, playerName, ready: !!ready })
+
+    // If all non-presenters are ready, begin reveal sequence
+    if (totalOthers > 0 && readyCount >= totalOthers) {
+      io.to(roomCode).emit('reveal-start', { code: roomCode })
+      const sub = (room.submissions || {})[presenter]
+      const angle = sub ? Number(sub.angle) : 90
+      setTimeout(() => {
+        io.to(roomCode).emit('reveal-target', {
+          code: roomCode,
+          presenter,
+          angle,
+          left: sub && sub.left,
+          right: sub && sub.right,
+          clueText: sub && sub.clue
+        })
+      }, 1500)
+    }
+  })
+
+  // Move to next presenter/round (host only)
+  socket.on('next-round', (data) => {
+    const { code, playerName } = data || {}
+    const roomCode = String(code || '').toUpperCase()
+    if (!roomCode || !rooms.has(roomCode)) return
+    const room = rooms.get(roomCode)
+    if (room.host !== playerName) return
+    if (!room.round || !Array.isArray(room.round.order) || room.round.order.length === 0) return
+
+    const order = room.round.order
+    const nextIndex = ((room.round.index || 0) + 1) % order.length
+    const presenter = order[nextIndex]
+    room.round.index = nextIndex
+    room.round.presenter = presenter
+    room.round.ready = {}
+    rooms.set(roomCode, room)
+
+    io.to(roomCode).emit('show-clue-giver', { code: roomCode, presenter })
+
+    setTimeout(() => {
+      const latest = rooms.get(roomCode)
+      if (!latest) return
+      const sub = (latest.submissions || {})[presenter]
+      if (!sub) return
+      io.to(roomCode).emit('present-clue', {
+        code: roomCode,
+        presenter,
+        angle: sub.angle,
+        clueText: sub.clue,
+        left: sub.left,
+        right: sub.right
+      })
+      const totalOthers = (latest.players ? latest.players.length : 0) - 1
+      io.to(roomCode).emit('ready-updated', { code: roomCode, readyCount: 0, totalOthers })
+    }, 500)
   })
 
   // Provide a new random clue to a single requester
